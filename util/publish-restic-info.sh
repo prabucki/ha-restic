@@ -26,22 +26,18 @@ publish_stats() {
   local TOTAL_RAW_DATA=$(jq -r .total_size <<< "$RAW_DATA")
   STATS_ATTR=$(jq -sc add <<< "$RESTORE_SIZE $RAW_DATA")
 
-  # Publish configs
-  local TOPICS=("stats-$TOPIC_TARGET-restore-size" "stats-$TOPIC_TARGET-raw-data" "repo-$TOPIC_TARGET-size" "repo-$TOPIC_TARGET-fill")
-  local NAMES=("restic stats $TARGET restore size" "restic stats $TARGET raw data" "Restic repo size ($TARGET)" "Restic repo fill ($TARGET)")
-  for i in {0..3}; do
-    local TOPIC="$BASE_TOPIC-${TOPICS[$i]}"
-    local CONFIG="{ \"name\": \"${NAMES[$i]}\", \"state_topic\": \"$TOPIC/state\", \"unit_of_measurement\": \"B\", \"json_attributes_topic\": \"$TOPIC/attributes\", \"unique_id\": \"restic-${TOPICS[$i]}\", \"device\": $DEVICE_JSON"
-    [[ $i -lt 2 ]] && CONFIG+=", \"value_template\": \"{{ value | filesizeformat() }}\" }"
-    [[ $i -eq 2 ]] && CONFIG+=", \"value_template\": \"{{ value | filesizeformat() }}\" }"
-    [[ $i -eq 3 ]] && CONFIG="{\"name\":\"${NAMES[$i]}\",\"state_topic\":\"$TOPIC/state\",\"unit_of_measurement\":\"%\",\"device_class\":\"battery\",\"json_attributes_topic\":\"$TOPIC/attributes\",\"unique_id\":\"restic-${TOPICS[$i]}\",\"device\":$DEVICE_JSON}"
-    $MOSQUITTO_PUB -r -t "$TOPIC/config" -m "$CONFIG"
-  done
-
-  # Publish state and attributes
+  # Publish sensor configs with proper numeric handling
   local RESTORE_TOPIC="$BASE_TOPIC-stats-$TOPIC_TARGET-restore-size"
   local RAW_TOPIC="$BASE_TOPIC-stats-$TOPIC_TARGET-raw-data"
   local REPO_TOPIC="$BASE_TOPIC-repo-$TOPIC_TARGET-size"
+  local FILL_TOPIC="$BASE_TOPIC-repo-$TOPIC_TARGET-fill"
+
+  $MOSQUITTO_PUB -r -t "$RESTORE_TOPIC/config" -m "{\"name\":\"restic stats $TARGET restore size\",\"state_topic\":\"$RESTORE_TOPIC/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"json_attributes_topic\":\"$RESTORE_TOPIC/attributes\",\"unique_id\":\"restic-stats-$TOPIC_TARGET-restore-size\",\"device\":$DEVICE_JSON}"
+  $MOSQUITTO_PUB -r -t "$RAW_TOPIC/config" -m "{\"name\":\"restic stats $TARGET raw data\",\"state_topic\":\"$RAW_TOPIC/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"json_attributes_topic\":\"$RAW_TOPIC/attributes\",\"unique_id\":\"restic-stats-$TOPIC_TARGET-raw-data\",\"device\":$DEVICE_JSON}"
+  $MOSQUITTO_PUB -r -t "$REPO_TOPIC/config" -m "{\"name\":\"Restic repo size ($TARGET)\",\"state_topic\":\"$REPO_TOPIC/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"json_attributes_topic\":\"$REPO_TOPIC/attributes\",\"unique_id\":\"restic-repo-$TOPIC_TARGET-size\",\"device\":$DEVICE_JSON}"
+  $MOSQUITTO_PUB -r -t "$FILL_TOPIC/config" -m "{\"name\":\"Restic repo fill ($TARGET)\",\"state_topic\":\"$FILL_TOPIC/state\",\"unit_of_measurement\":\"%\",\"state_class\":\"measurement\",\"json_attributes_topic\":\"$FILL_TOPIC/attributes\",\"unique_id\":\"restic-repo-$TOPIC_TARGET-fill\",\"device\":$DEVICE_JSON}"
+
+  # Publish state and attributes
   $MOSQUITTO_PUB -r -t "$RESTORE_TOPIC/attributes" -m "$RESTORE_SIZE"
   $MOSQUITTO_PUB -r -t "$RESTORE_TOPIC/state" -m "$TOTAL_RESTORE_SIZE"
   $MOSQUITTO_PUB -r -t "$RAW_TOPIC/attributes" -m "$RAW_DATA"
@@ -52,7 +48,6 @@ publish_stats() {
   # Calculate and publish fill percentage if DISK_SIZE is set
   if [[ -n "${DISK_SIZE:-}" ]] && [[ "$DISK_SIZE" -gt 0 ]] 2>/dev/null; then
     local FILL_PCT=$(awk "BEGIN {printf \"%.2f\", ($TOTAL_RAW_DATA/$DISK_SIZE)*100}")
-    local FILL_TOPIC="$BASE_TOPIC-repo-$TOPIC_TARGET-fill"
     local FILL_ATTR=$(jq -c --argjson fill "$FILL_PCT" '. + {fill_percent:$fill}' <<< "$STATS_ATTR")
     $MOSQUITTO_PUB -r -t "$FILL_TOPIC/attributes" -m "$FILL_ATTR"
     $MOSQUITTO_PUB -r -t "$FILL_TOPIC/state" -m "$FILL_PCT"
@@ -70,8 +65,9 @@ publish_snapshots() {
 
   while IFS= read -r TAG; do
     local TOPIC_TAG=$(sanitize_topic_component "$TAG")
+    local BASE="homeassistant/sensor/restic-$TOPIC_TAG-$TOPIC_TARGET"
     
-    # Fetch all snapshot data in one call
+    # Fetch all snapshot data
     local SNAPSHOT_LIST=$(restic snapshots --tag "$TAG" --json 2>/dev/null || echo "[]")
     local SNAPSHOT_COUNT=$(jq length <<< "$SNAPSHOT_LIST")
     local SNAPSHOT=$(jq -c '.[0] // {}' <<< "$SNAPSHOT_LIST")
@@ -80,43 +76,93 @@ publish_snapshots() {
     local SNAPSHOT_TS=$(date -d "$SNAPSHOT_TIME" +%s 2>/dev/null || echo "0")
     local AGE_SEC=$((NOW_TS-SNAPSHOT_TS))
     
-    # Determine status and health
-    local STATUS="Unknown" HEALTH="missing"
-    [[ -n "$SNAPSHOT_ID" ]] && STATUS="Success" && HEALTH="ok"
+    # Determine health
+    local HEALTH="missing"
+    [[ -n "$SNAPSHOT_ID" ]] && HEALTH="ok"
     [[ $SNAPSHOT_TS -gt 0 && $AGE_SEC -gt $THRESHOLD_SEC ]] && HEALTH="stale"
 
     # Fetch stats if snapshot exists
-    local RESTORE_SIZE="{}" RAW_DATA="{}"
+    local RESTORE_STATS="{}" RAW_STATS="{}"
     if [[ -n "$SNAPSHOT_ID" ]]; then
-      RESTORE_SIZE=$(restic stats "$SNAPSHOT_ID" --json 2>/dev/null | jq 'del(.snapshots_count) | .total_restore_size = .total_size | .total_retore_file_count = .total_file_count | del(.total_size, .total_file_count)' || echo "{}")
-      RAW_DATA=$(restic stats "$SNAPSHOT_ID" --json --mode raw-data 2>/dev/null | jq 'del(.snapshots_count) | .total_raw_data = .total_size | del(.total_size, .total_file_count)' || echo "{}")
+      RESTORE_STATS=$(restic stats "$SNAPSHOT_ID" --json 2>/dev/null || echo "{}")
+      RAW_STATS=$(restic stats "$SNAPSHOT_ID" --json --mode raw-data 2>/dev/null || echo "{}")
     fi
 
     log_msg "$TAG: id=${SNAPSHOT_ID:-none} age=${AGE_SEC}s health=$HEALTH count=$SNAPSHOT_COUNT"
 
-    # Build attributes in one jq call
-    local ATTR=$(jq -nc \
-      --arg status "$STATUS" --arg health "$HEALTH" --arg target "$TARGET" --arg tag "$TAG" \
-      --arg snapshot_time "$SNAPSHOT_TIME" --arg snapshot_id "$SNAPSHOT_ID" \
-      --argjson snapshots_count "$SNAPSHOT_COUNT" --argjson snapshot_ts "$SNAPSHOT_TS" --argjson age_seconds "$AGE_SEC" \
-      --argjson restore "$RESTORE_SIZE" --argjson raw "$RAW_DATA" \
-      '{status:$status, health:$health, target:$target, tag:$tag, snapshot_time:$snapshot_time, snapshot_id:$snapshot_id, snapshots_count:$snapshots_count, snapshot_ts:$snapshot_ts, age_seconds:$age_seconds} + $restore + $raw')
+    # Extract individual values
+    local TOTAL_RESTORE_SIZE=$(jq -r '.total_size // 0' <<< "$RESTORE_STATS")
+    local TOTAL_FILE_COUNT=$(jq -r '.total_file_count // 0' <<< "$RESTORE_STATS")
+    local TOTAL_UNCOMPRESSED=$(jq -r '.total_uncompressed_size // 0' <<< "$RESTORE_STATS")
+    local COMPRESSION_RATIO=$(jq -r '.compression_ratio // 1' <<< "$RESTORE_STATS")
+    local COMPRESSION_PROGRESS=$(jq -r '.compression_progress // 0' <<< "$RESTORE_STATS")
+    local COMPRESSION_SAVING=$(jq -r '.compression_space_saving // 0' <<< "$RESTORE_STATS")
+    local TOTAL_BLOB_COUNT=$(jq -r '.total_blob_count // 0' <<< "$RESTORE_STATS")
+    local TOTAL_RAW_DATA=$(jq -r '.total_size // 0' <<< "$RAW_STATS")
+    
+    # Calculate fill percentage
+    local FILL_PCT="0"
+    if [[ -n "${DISK_SIZE:-}" ]] && [[ "$DISK_SIZE" -gt 0 ]] && [[ "$TOTAL_RAW_DATA" -gt 0 ]] 2>/dev/null; then
+      FILL_PCT=$(awk "BEGIN {printf \"%.2f\", ($TOTAL_RAW_DATA/$DISK_SIZE)*100}")
+    fi
 
-    # Publish
-    local JOB_TOPIC="homeassistant/sensor/restic-$TOPIC_TAG-$TOPIC_TARGET"
-    local FRIENDLY_TAG="${TAG//:/ }"
-    $MOSQUITTO_PUB -r -t "$JOB_TOPIC/config" -m "{\"name\":\"Restic backup ($TARGET / $FRIENDLY_TAG)\",\"state_topic\":\"$JOB_TOPIC/state\",\"value_template\":\"{{ value }}\",\"json_attributes_topic\":\"$JOB_TOPIC/attributes\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET\",\"device\":$DEVICE_JSON}"
-    $MOSQUITTO_PUB -r -t "$JOB_TOPIC/state" -m "$STATUS"
-    $MOSQUITTO_PUB -r -t "$JOB_TOPIC/attributes" -m "$ATTR"
-
-    # Special case for backrest
-    [[ "$TARGET" = "backrest" && "$TAG" = "plan:BojanoBackup" ]] && {
-      local SINGLE_TOPIC="homeassistant/sensor/restic_backup_backrest_plan_bojanobackup"
-      local COMBINED_ATTR=$(jq -sc add <<< "$ATTR $STATS_ATTR")
-      $MOSQUITTO_PUB -r -t "$SINGLE_TOPIC/config" -m "{\"name\":\"Restic backup backrest plan BojanoBackup\",\"state_topic\":\"$SINGLE_TOPIC/state\",\"value_template\":\"{{ value }}\",\"json_attributes_topic\":\"$SINGLE_TOPIC/attributes\",\"unique_id\":\"restic-backup-backrest-plan-bojanobackup\",\"device\":$DEVICE_JSON}"
-      $MOSQUITTO_PUB -r -t "$SINGLE_TOPIC/state" -m "$STATUS"
-      $MOSQUITTO_PUB -r -t "$SINGLE_TOPIC/attributes" -m "$COMBINED_ATTR"
-    }
+    # Publish individual sensors
+    local FRIENDLY="${TAG//:/ }"
+    
+    # Health sensor
+    $MOSQUITTO_PUB -r -t "$BASE-health/config" -m "{\"name\":\"$TARGET $FRIENDLY Health\",\"state_topic\":\"$BASE-health/state\",\"icon\":\"mdi:heart-pulse\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-health\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-health/state" -m "$HEALTH"
+    
+    # Snapshot ID
+    $MOSQUITTO_PUB -r -t "$BASE-id/config" -m "{\"name\":\"$TARGET $FRIENDLY Snapshot ID\",\"state_topic\":\"$BASE-id/state\",\"icon\":\"mdi:identifier\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-id\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-id/state" -m "${SNAPSHOT_ID:-none}"
+    
+    # Snapshot time
+    $MOSQUITTO_PUB -r -t "$BASE-time/config" -m "{\"name\":\"$TARGET $FRIENDLY Snapshot Time\",\"state_topic\":\"$BASE-time/state\",\"device_class\":\"timestamp\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-time\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-time/state" -m "$SNAPSHOT_TIME"
+    
+    # Age in seconds
+    $MOSQUITTO_PUB -r -t "$BASE-age/config" -m "{\"name\":\"$TARGET $FRIENDLY Age\",\"state_topic\":\"$BASE-age/state\",\"unit_of_measurement\":\"s\",\"device_class\":\"duration\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-age\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-age/state" -m "$AGE_SEC"
+    
+    # Snapshot count
+    $MOSQUITTO_PUB -r -t "$BASE-count/config" -m "{\"name\":\"$TARGET $FRIENDLY Snapshot Count\",\"state_topic\":\"$BASE-count/state\",\"icon\":\"mdi:counter\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-count\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-count/state" -m "$SNAPSHOT_COUNT"
+    
+    # Total restore size
+    $MOSQUITTO_PUB -r -t "$BASE-restore-size/config" -m "{\"name\":\"$TARGET $FRIENDLY Restore Size\",\"state_topic\":\"$BASE-restore-size/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-restore-size\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-restore-size/state" -m "$TOTAL_RESTORE_SIZE"
+    
+    # File count
+    $MOSQUITTO_PUB -r -t "$BASE-file-count/config" -m "{\"name\":\"$TARGET $FRIENDLY File Count\",\"state_topic\":\"$BASE-file-count/state\",\"icon\":\"mdi:file-multiple\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-file-count\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-file-count/state" -m "$TOTAL_FILE_COUNT"
+    
+    # Uncompressed size
+    $MOSQUITTO_PUB -r -t "$BASE-uncompressed/config" -m "{\"name\":\"$TARGET $FRIENDLY Uncompressed Size\",\"state_topic\":\"$BASE-uncompressed/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-uncompressed\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-uncompressed/state" -m "$TOTAL_UNCOMPRESSED"
+    
+    # Compression ratio
+    $MOSQUITTO_PUB -r -t "$BASE-compression-ratio/config" -m "{\"name\":\"$TARGET $FRIENDLY Compression Ratio\",\"state_topic\":\"$BASE-compression-ratio/state\",\"icon\":\"mdi:compress\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-compression-ratio\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-compression-ratio/state" -m "$COMPRESSION_RATIO"
+    
+    # Compression space saving
+    $MOSQUITTO_PUB -r -t "$BASE-compression-saving/config" -m "{\"name\":\"$TARGET $FRIENDLY Compression Saving\",\"state_topic\":\"$BASE-compression-saving/state\",\"unit_of_measurement\":\"%\",\"icon\":\"mdi:percent\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-compression-saving\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-compression-saving/state" -m "$COMPRESSION_SAVING"
+    
+    # Blob count
+    $MOSQUITTO_PUB -r -t "$BASE-blob-count/config" -m "{\"name\":\"$TARGET $FRIENDLY Blob Count\",\"state_topic\":\"$BASE-blob-count/state\",\"icon\":\"mdi:database\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-blob-count\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-blob-count/state" -m "$TOTAL_BLOB_COUNT"
+    
+    # Raw data (actual repo size)
+    $MOSQUITTO_PUB -r -t "$BASE-raw-data/config" -m "{\"name\":\"$TARGET $FRIENDLY Raw Data\",\"state_topic\":\"$BASE-raw-data/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-raw-data\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-raw-data/state" -m "$TOTAL_RAW_DATA"
+    
+    # Fill percentage (if DISK_SIZE is set)
+    if [[ "$FILL_PCT" != "0" ]]; then
+      $MOSQUITTO_PUB -r -t "$BASE-fill/config" -m "{\"name\":\"$TARGET $FRIENDLY Fill\",\"state_topic\":\"$BASE-fill/state\",\"unit_of_measurement\":\"%\",\"icon\":\"mdi:gauge\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-fill\",\"device\":$DEVICE_JSON}"
+      $MOSQUITTO_PUB -r -t "$BASE-fill/state" -m "$FILL_PCT"
+    fi
+    
   done < <(/etc/restic/util/list-tags.sh "$TARGET")
 }
 
