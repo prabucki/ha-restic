@@ -12,49 +12,6 @@ TAG="" source /etc/restic/targets/includes/pre.sh "$TARGET_INPUT"
 
 log_msg() { echo "[publish][$TARGET] $1" >&2; }
 
-publish_stats() {
-  local TOPIC_TARGET=$(sanitize_topic_component "$TARGET")
-  local DEVICE_JSON="{ \"identifiers\": [\"restic-$TOPIC_TARGET\"], \"name\": \"Restic ($TARGET)\", \"manufacturer\": \"restic\", \"model\": \"restic-mqtt\" }"
-  local BASE_TOPIC="homeassistant/sensor/restic"
-
-  log_msg "Publishing stats"
-
-  # Fetch stats once
-  local RESTORE_SIZE=$(restic stats --json)
-  local RAW_DATA=$(restic stats --json --mode raw-data)
-  local TOTAL_RESTORE_SIZE=$(jq -r .total_size <<< "$RESTORE_SIZE")
-  local TOTAL_RAW_DATA=$(jq -r .total_size <<< "$RAW_DATA")
-  STATS_ATTR=$(jq -sc add <<< "$RESTORE_SIZE $RAW_DATA")
-
-  # Publish sensor configs with proper numeric handling
-  local RESTORE_TOPIC="$BASE_TOPIC-stats-$TOPIC_TARGET-restore-size"
-  local RAW_TOPIC="$BASE_TOPIC-stats-$TOPIC_TARGET-raw-data"
-  local REPO_TOPIC="$BASE_TOPIC-repo-$TOPIC_TARGET-size"
-  local FILL_TOPIC="$BASE_TOPIC-repo-$TOPIC_TARGET-fill"
-
-  $MOSQUITTO_PUB -r -t "$RESTORE_TOPIC/config" -m "{\"name\":\"restic stats $TARGET restore size\",\"state_topic\":\"$RESTORE_TOPIC/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"json_attributes_topic\":\"$RESTORE_TOPIC/attributes\",\"unique_id\":\"restic-stats-$TOPIC_TARGET-restore-size\",\"device\":$DEVICE_JSON}"
-  $MOSQUITTO_PUB -r -t "$RAW_TOPIC/config" -m "{\"name\":\"restic stats $TARGET raw data\",\"state_topic\":\"$RAW_TOPIC/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"json_attributes_topic\":\"$RAW_TOPIC/attributes\",\"unique_id\":\"restic-stats-$TOPIC_TARGET-raw-data\",\"device\":$DEVICE_JSON}"
-  $MOSQUITTO_PUB -r -t "$REPO_TOPIC/config" -m "{\"name\":\"Restic repo size ($TARGET)\",\"state_topic\":\"$REPO_TOPIC/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"json_attributes_topic\":\"$REPO_TOPIC/attributes\",\"unique_id\":\"restic-repo-$TOPIC_TARGET-size\",\"device\":$DEVICE_JSON}"
-  $MOSQUITTO_PUB -r -t "$FILL_TOPIC/config" -m "{\"name\":\"Restic repo fill ($TARGET)\",\"state_topic\":\"$FILL_TOPIC/state\",\"unit_of_measurement\":\"%\",\"state_class\":\"measurement\",\"json_attributes_topic\":\"$FILL_TOPIC/attributes\",\"unique_id\":\"restic-repo-$TOPIC_TARGET-fill\",\"device\":$DEVICE_JSON}"
-
-  # Publish state and attributes
-  $MOSQUITTO_PUB -r -t "$RESTORE_TOPIC/attributes" -m "$RESTORE_SIZE"
-  $MOSQUITTO_PUB -r -t "$RESTORE_TOPIC/state" -m "$TOTAL_RESTORE_SIZE"
-  $MOSQUITTO_PUB -r -t "$RAW_TOPIC/attributes" -m "$RAW_DATA"
-  $MOSQUITTO_PUB -r -t "$RAW_TOPIC/state" -m "$TOTAL_RAW_DATA"
-  $MOSQUITTO_PUB -r -t "$REPO_TOPIC/attributes" -m "$STATS_ATTR"
-  $MOSQUITTO_PUB -r -t "$REPO_TOPIC/state" -m "$TOTAL_RAW_DATA"
-
-  # Calculate and publish fill percentage if DISK_SIZE is set
-  if [[ -n "${DISK_SIZE:-}" ]] && [[ "$DISK_SIZE" -gt 0 ]] 2>/dev/null; then
-    local FILL_PCT=$(awk "BEGIN {printf \"%.2f\", ($TOTAL_RAW_DATA/$DISK_SIZE)*100}")
-    local FILL_ATTR=$(jq -c --argjson fill "$FILL_PCT" '. + {fill_percent:$fill}' <<< "$STATS_ATTR")
-    $MOSQUITTO_PUB -r -t "$FILL_TOPIC/attributes" -m "$FILL_ATTR"
-    $MOSQUITTO_PUB -r -t "$FILL_TOPIC/state" -m "$FILL_PCT"
-    log_msg "Repo fill: ${FILL_PCT}%"
-  fi
-}
-
 publish_snapshots() {
   local THRESHOLD_SEC=$(((${HEALTH_THRESHOLD_HOURS:-36})*3600))
   local NOW_TS=$(date +%s)
@@ -64,6 +21,16 @@ publish_snapshots() {
   log_msg "Publishing snapshots (threshold ${HEALTH_THRESHOLD_HOURS:-36}h)"
 
   while IFS= read -r TAG; do
+    [[ -z "$TAG" ]] && continue  # Skip empty lines
+    
+    # Only process tags starting with "plan:" to avoid duplicates
+    if [[ ! "$TAG" =~ ^plan: ]]; then
+      log_msg "Skipping tag: $TAG (not a plan tag)"
+      continue
+    fi
+    
+    log_msg "Processing tag: $TAG"
+    
     local TOPIC_TAG=$(sanitize_topic_component "$TAG")
     local BASE="homeassistant/sensor/restic-$TOPIC_TAG-$TOPIC_TARGET"
     
@@ -93,12 +60,36 @@ publish_snapshots() {
     # Extract individual values
     local TOTAL_RESTORE_SIZE=$(jq -r '.total_size // 0' <<< "$RESTORE_STATS")
     local TOTAL_FILE_COUNT=$(jq -r '.total_file_count // 0' <<< "$RESTORE_STATS")
-    local TOTAL_UNCOMPRESSED=$(jq -r '.total_uncompressed_size // 0' <<< "$RESTORE_STATS")
-    local COMPRESSION_RATIO=$(jq -r '.compression_ratio // 1' <<< "$RESTORE_STATS")
+    local TOTAL_UNCOMPRESSED=$(jq -r '.total_uncompressed_size // null' <<< "$RESTORE_STATS")
+    local COMPRESSION_RATIO=$(jq -r '.compression_ratio // null' <<< "$RESTORE_STATS")
     local COMPRESSION_PROGRESS=$(jq -r '.compression_progress // 0' <<< "$RESTORE_STATS")
-    local COMPRESSION_SAVING=$(jq -r '.compression_space_saving // 0' <<< "$RESTORE_STATS")
-    local TOTAL_BLOB_COUNT=$(jq -r '.total_blob_count // 0' <<< "$RESTORE_STATS")
+    local COMPRESSION_SAVING=$(jq -r '.compression_space_saving // null' <<< "$RESTORE_STATS")
+    local TOTAL_BLOB_COUNT=$(jq -r '.total_blob_count // null' <<< "$RESTORE_STATS")
     local TOTAL_RAW_DATA=$(jq -r '.total_size // 0' <<< "$RAW_STATS")
+    
+    # If compression stats are not available, calculate manually
+    if [[ "$TOTAL_UNCOMPRESSED" == "null" ]] || [[ "$TOTAL_UNCOMPRESSED" == "0" ]]; then
+      TOTAL_UNCOMPRESSED="$TOTAL_RESTORE_SIZE"
+    fi
+    
+    # Calculate compression ratio if not provided
+    if [[ "$COMPRESSION_RATIO" == "null" ]] && [[ "$TOTAL_UNCOMPRESSED" != "0" ]] && [[ "$TOTAL_RAW_DATA" != "0" ]]; then
+      COMPRESSION_RATIO=$(awk "BEGIN {printf \"%.2f\", $TOTAL_UNCOMPRESSED/$TOTAL_RAW_DATA}")
+    elif [[ "$COMPRESSION_RATIO" == "null" ]]; then
+      COMPRESSION_RATIO="1.00"
+    fi
+    
+    # Calculate compression saving if not provided
+    if [[ "$COMPRESSION_SAVING" == "null" ]] && [[ "$TOTAL_UNCOMPRESSED" != "0" ]] && [[ "$TOTAL_RAW_DATA" != "0" ]]; then
+      COMPRESSION_SAVING=$(awk "BEGIN {printf \"%.2f\", (1-$TOTAL_RAW_DATA/$TOTAL_UNCOMPRESSED)*100}")
+    elif [[ "$COMPRESSION_SAVING" == "null" ]]; then
+      COMPRESSION_SAVING="0"
+    fi
+    
+    # Get blob count from raw stats if not in restore stats
+    if [[ "$TOTAL_BLOB_COUNT" == "null" ]]; then
+      TOTAL_BLOB_COUNT=$(jq -r '.total_blob_count // 0' <<< "$RAW_STATS")
+    fi
     
     # Calculate fill percentage
     local FILL_PCT="0"
@@ -121,7 +112,7 @@ publish_snapshots() {
     $MOSQUITTO_PUB -r -t "$BASE-time/config" -m "{\"name\":\"Snapshot Time\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_time\",\"state_topic\":\"$BASE-time/state\",\"device_class\":\"timestamp\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-time\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-time/state" -m "$SNAPSHOT_TIME"
     
-    # Age in seconds
+    # Age in seconds (calculated from snapshot time)
     $MOSQUITTO_PUB -r -t "$BASE-age/config" -m "{\"name\":\"Age\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_age\",\"state_topic\":\"$BASE-age/state\",\"unit_of_measurement\":\"s\",\"device_class\":\"duration\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-age\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-age/state" -m "$AGE_SEC"
     
@@ -163,9 +154,10 @@ publish_snapshots() {
       $MOSQUITTO_PUB -r -t "$BASE-fill/state" -m "$FILL_PCT"
     fi
     
-  done < <(/etc/restic/util/list-tags.sh "$TARGET")
+    log_msg "Finished processing tag: $TAG"
+    
+  done < <(/etc/restic/util/list-tags.sh "$TARGET" | sort -u)
 }
 
-publish_stats
 publish_snapshots
 log_msg "Finished"
