@@ -12,6 +12,45 @@ TAG="" source /etc/restic/targets/includes/pre.sh "$TARGET_INPUT"
 
 log_msg() { echo "[publish][$TARGET] $1" >&2; }
 
+# Function to check repository connectivity
+check_repo_connectivity() {
+  log_msg "Checking repository connectivity"
+  set +e  # Temporarily disable exit on error
+  local CHECK_OUTPUT
+  CHECK_OUTPUT=$(restic snapshots --json 2>&1)
+  local EXIT_CODE=$?
+  set -e  # Re-enable exit on error
+  
+  if [[ $EXIT_CODE -ne 0 ]]; then
+    if echo "$CHECK_OUTPUT" | grep -qE "ssh: connect to host|No route to host|Connection refused|unable to start the sftp session|Connection timed out|server unexpectedly closed connection"; then
+      log_msg "Repository is offline (SSH/SFTP connection failed)"
+      return 1
+    fi
+    # For other errors, let them propagate
+    log_msg "Repository check failed with unexpected error (exit code: $EXIT_CODE)"
+    echo "$CHECK_OUTPUT" >&2
+    exit $EXIT_CODE
+  fi
+  
+  log_msg "Repository is online"
+  return 0
+}
+
+# Function to publish offline status
+publish_offline_status() {
+  local TOPIC_TARGET=$(sanitize_topic_component "$TARGET")
+  local DEVICE_JSON="{ \"identifiers\": [\"restic-$TOPIC_TARGET\"], \"name\": \"Restic ($TARGET)\", \"manufacturer\": \"restic\", \"model\": \"restic-mqtt\" }"
+  local BASE="homeassistant/sensor/restic-$TOPIC_TARGET"
+  
+  log_msg "Publishing offline status"
+  
+  # Publish server status sensor
+  $MOSQUITTO_PUB -r -t "$BASE-server-status/config" -m "{\"name\":\"Server Status\",\"object_id\":\"restic_${TOPIC_TARGET}_server_status\",\"state_topic\":\"$BASE-server-status/state\",\"icon\":\"mdi:server-network-off\",\"unique_id\":\"restic-$TOPIC_TARGET-server-status\",\"device\":$DEVICE_JSON}"
+  $MOSQUITTO_PUB -r -t "$BASE-server-status/state" -m "offline"
+  
+  log_msg "Published offline status"
+}
+
 publish_snapshots() {
   local THRESHOLD_SEC=$(((${HEALTH_THRESHOLD_HOURS:-48})*3600))
   local NOW_TS=$(date +%s)
@@ -181,6 +220,13 @@ publish_snapshots() {
     
   done < <(/etc/restic/util/list-tags.sh "$TARGET" | sort -u)
 }
+
+# Check repository connectivity first
+if ! check_repo_connectivity; then
+  publish_offline_status
+  log_msg "Finished (offline)"
+  exit 0
+fi
 
 publish_snapshots
 log_msg "Finished"
