@@ -46,6 +46,30 @@ publish_snapshots() {
     # Determine health - simply based on snapshot existence
     local HEALTH="missing"
     [[ -n "$SNAPSHOT_ID" ]] && HEALTH="ok"
+    
+    # Check for running restic operations
+    local OPERATION_STATUS="idle"
+    local OPERATION_PROGRESS="0"
+    local RESTIC_PID=$(pgrep -f "restic.*$TARGET" | head -n1)
+    if [[ -n "$RESTIC_PID" ]]; then
+      local CMD=$(ps -p "$RESTIC_PID" -o args= 2>/dev/null || echo "")
+      if [[ "$CMD" =~ backup ]]; then
+        OPERATION_STATUS="backup"
+      elif [[ "$CMD" =~ prune ]]; then
+        OPERATION_STATUS="prune"
+      elif [[ "$CMD" =~ check ]]; then
+        OPERATION_STATUS="check"
+      elif [[ "$CMD" =~ verify ]]; then
+        OPERATION_STATUS="verify"
+      elif [[ "$CMD" =~ restore ]]; then
+        OPERATION_STATUS="restore"
+      elif [[ "$CMD" =~ forget ]]; then
+        OPERATION_STATUS="forget"
+      else
+        OPERATION_STATUS="running"
+      fi
+      log_msg "Detected running operation: $OPERATION_STATUS (PID: $RESTIC_PID)"
+    fi
 
     # Fetch stats if snapshot exists
     local RESTORE_STATS="{}" RAW_STATS="{}"
@@ -102,6 +126,10 @@ publish_snapshots() {
     # Health sensor
     $MOSQUITTO_PUB -r -t "$BASE-health/config" -m "{\"name\":\"Health\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_health\",\"state_topic\":\"$BASE-health/state\",\"icon\":\"mdi:heart-pulse\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-health\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-health/state" -m "$HEALTH"
+    
+    # Operation status sensor
+    $MOSQUITTO_PUB -r -t "$BASE-operation/config" -m "{\"name\":\"Operation Status\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_operation\",\"state_topic\":\"$BASE-operation/state\",\"icon\":\"mdi:cog\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-operation\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-operation/state" -m "$OPERATION_STATUS"
     
     # Snapshot ID
     $MOSQUITTO_PUB -r -t "$BASE-id/config" -m "{\"name\":\"Snapshot ID\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_id\",\"state_topic\":\"$BASE-id/state\",\"icon\":\"mdi:identifier\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-id\",\"device\":$DEVICE_JSON}"
