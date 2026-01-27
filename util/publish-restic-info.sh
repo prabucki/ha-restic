@@ -19,6 +19,15 @@ BASE="homeassistant/sensor/restic-$TOPIC_TAG-$TOPIC_TARGET"
 
 log_msg() { echo "[publish][$TARGET] $1" >&2; }
 
+# Function to check backup health from systemd journal
+check_backup_health() {
+  if journalctl -u backrest.service --no-pager 2>/dev/null | grep -q "ERROR.*backup for plan \"BojanoBackup\""; then
+    echo "FAILED"
+  else
+    echo "OK"
+  fi
+}
+
 # Function to check repository connectivity
 check_repo_connectivity() {
   log_msg "Checking repository connectivity"
@@ -46,6 +55,14 @@ check_repo_connectivity() {
 # Function to publish offline status
 publish_offline_status() {
   log_msg "Publishing offline status"
+
+  # Check backup health from journal
+  local HEALTH=$(check_backup_health)
+  log_msg "Backup health: $HEALTH"
+
+  # Publish health sensor
+  $MOSQUITTO_PUB -r -t "$BASE-health/config" -m "{\"name\":\"Health\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_health\",\"state_topic\":\"$BASE-health/state\",\"icon\":\"mdi:heart-pulse\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-health\",\"device\":$DEVICE_JSON}"
+  $MOSQUITTO_PUB -r -t "$BASE-health/state" -m "$HEALTH"
 
   # Publish operation status as offline
   $MOSQUITTO_PUB -r -t "$BASE-operation/config" -m "{\"name\":\"Operation Status\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_operation\",\"state_topic\":\"$BASE-operation/state\",\"icon\":\"mdi:server-network-off\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-operation\",\"device\":$DEVICE_JSON}"
@@ -150,6 +167,13 @@ publish_snapshots() {
 
     # Publish individual sensors
     local FRIENDLY="${TAG//:/ }"
+
+    # Check backup health from journal
+    local HEALTH_STATUS=$(check_backup_health)
+
+    # Health sensor
+    $MOSQUITTO_PUB -r -t "$BASE-health/config" -m "{\"name\":\"Health\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_health\",\"state_topic\":\"$BASE-health/state\",\"icon\":\"mdi:heart-pulse\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-health\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-health/state" -m "$HEALTH_STATUS"
 
     # Operation status sensor
     $MOSQUITTO_PUB -r -t "$BASE-operation/config" -m "{\"name\":\"Operation Status\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_operation\",\"state_topic\":\"$BASE-operation/state\",\"icon\":\"mdi:cog\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-operation\",\"device\":$DEVICE_JSON}"
