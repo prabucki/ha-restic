@@ -10,6 +10,8 @@ if [ -z "$TARGET_INPUT" ]; then
   exit 1
 fi
 
+STATS_ATTR="{}"
+
 # Load target (pre.sh logs start and sets TARGET env); TAG intentionally empty.
 TAG="" source /etc/restic/targets/includes/pre.sh "$TARGET_INPUT"
 
@@ -19,6 +21,7 @@ log_msg() {
 
 publish_stats() {
   TOPIC_TARGET=$(sanitize_topic_component "$TARGET")
+  DEVICE_JSON="{ \"identifiers\": [\"restic-$TOPIC_TARGET\"], \"name\": \"Restic ($TARGET)\", \"manufacturer\": \"restic\", \"model\": \"restic-mqtt\" }"
   RESTORE_SIZE_TOPIC="homeassistant/sensor/restic-stats-$TOPIC_TARGET-restore-size"
   RAW_DATA_TOPIC="homeassistant/sensor/restic-stats-$TOPIC_TARGET-raw-data"
   REPO_TOPIC="homeassistant/sensor/restic-repo-$TOPIC_TARGET-size"
@@ -30,16 +33,17 @@ publish_stats() {
   log_msg "Repo topic: $REPO_TOPIC"
   log_msg "Fill topic: $FILL_TOPIC"
 
-  $MOSQUITTO_PUB -r -t "$RESTORE_SIZE_TOPIC/config" -m "{ \"name\": \"restic stats $TARGET restore size\", \"state_topic\": \"$RESTORE_SIZE_TOPIC/state\", \"value_template\": \"{{ value | filesizeformat() }}\", \"unit_of_measurement\": \"B\", \"json_attributes_topic\": \"$RESTORE_SIZE_TOPIC/attributes\", \"unique_id\": \"restic-stats-$TOPIC_TARGET-restore-size\" }"
-  $MOSQUITTO_PUB -r -t "$RAW_DATA_TOPIC/config" -m "{ \"name\": \"restic stats $TARGET raw data\", \"state_topic\": \"$RAW_DATA_TOPIC/state\", \"value_template\": \"{{ value | filesizeformat() }}\", \"unit_of_measurement\": \"B\", \"json_attributes_topic\": \"$RAW_DATA_TOPIC/attributes\", \"unique_id\": \"restic-stats-$TOPIC_TARGET-raw-data\" }"
-  $MOSQUITTO_PUB -r -t "$REPO_TOPIC/config" -m "{ \"name\": \"Restic repo size ($TARGET)\", \"state_topic\": \"$REPO_TOPIC/state\", \"value_template\": \"{{ value | filesizeformat() }}\", \"unit_of_measurement\": \"B\", \"json_attributes_topic\": \"$REPO_TOPIC/attributes\", \"unique_id\": \"restic-repo-$TOPIC_TARGET-size\" }"
-  $MOSQUITTO_PUB -r -t "$FILL_TOPIC/config" -m "{ \"name\": \"Restic repo fill ($TARGET)\", \"state_topic\": \"$FILL_TOPIC/state\", \"unit_of_measurement\": \"%\", \"device_class\": \"battery\", \"json_attributes_topic\": \"$FILL_TOPIC/attributes\", \"unique_id\": \"restic-repo-$TOPIC_TARGET-fill\" }"
+  $MOSQUITTO_PUB -r -t "$RESTORE_SIZE_TOPIC/config" -m "{ \"name\": \"restic stats $TARGET restore size\", \"state_topic\": \"$RESTORE_SIZE_TOPIC/state\", \"value_template\": \"{{ value | filesizeformat() }}\", \"unit_of_measurement\": \"B\", \"json_attributes_topic\": \"$RESTORE_SIZE_TOPIC/attributes\", \"unique_id\": \"restic-stats-$TOPIC_TARGET-restore-size\", \"device\": $DEVICE_JSON }"
+  $MOSQUITTO_PUB -r -t "$RAW_DATA_TOPIC/config" -m "{ \"name\": \"restic stats $TARGET raw data\", \"state_topic\": \"$RAW_DATA_TOPIC/state\", \"value_template\": \"{{ value | filesizeformat() }}\", \"unit_of_measurement\": \"B\", \"json_attributes_topic\": \"$RAW_DATA_TOPIC/attributes\", \"unique_id\": \"restic-stats-$TOPIC_TARGET-raw-data\", \"device\": $DEVICE_JSON }"
+  $MOSQUITTO_PUB -r -t "$REPO_TOPIC/config" -m "{ \"name\": \"Restic repo size ($TARGET)\", \"state_topic\": \"$REPO_TOPIC/state\", \"value_template\": \"{{ value | filesizeformat() }}\", \"unit_of_measurement\": \"B\", \"json_attributes_topic\": \"$REPO_TOPIC/attributes\", \"unique_id\": \"restic-repo-$TOPIC_TARGET-size\", \"device\": $DEVICE_JSON }"
+  $MOSQUITTO_PUB -r -t "$FILL_TOPIC/config" -m "{ \"name\": \"Restic repo fill ($TARGET)\", \"state_topic\": \"$FILL_TOPIC/state\", \"unit_of_measurement\": \"%\", \"device_class\": \"battery\", \"json_attributes_topic\": \"$FILL_TOPIC/attributes\", \"unique_id\": \"restic-repo-$TOPIC_TARGET-fill\", \"device\": $DEVICE_JSON }"
 
   RESTORE_SIZE=$(restic stats --json)
   RAW_DATA=$(restic stats --json --mode raw-data)
   TOTAL_RESTORE_SIZE=$(echo $RESTORE_SIZE | jq ".total_size")
   TOTAL_RAW_DATA=$(echo $RAW_DATA | jq ".total_size")
   REPO_ATTR=$(echo $RESTORE_SIZE $RAW_DATA | jq -c -s 'add')
+  STATS_ATTR="$REPO_ATTR"
 
   FILL_PCT=""
   if [ -n "${DISK_SIZE:-}" ] && [ "$DISK_SIZE" -gt 0 ] 2>/dev/null; then
@@ -84,6 +88,7 @@ publish_snapshots() {
     log_msg "Processing tag: $TAG"
     TOPIC_TAG=$(sanitize_topic_component "$TAG")
     TOPIC_TARGET=$(sanitize_topic_component "$TARGET")
+    DEVICE_JSON="{ \"identifiers\": [\"restic-$TOPIC_TARGET\"], \"name\": \"Restic ($TARGET)\", \"manufacturer\": \"restic\", \"model\": \"restic-mqtt\" }"
 
     SNAPSHOT_JSON=$(restic snapshots --latest 1 --tag "$TAG" --json 2>/dev/null || echo "[]")
     SNAPSHOT=$(echo "$SNAPSHOT_JSON" | jq -c '.[0] // {}')
@@ -129,9 +134,18 @@ publish_snapshots() {
     JOB_TOPIC="homeassistant/sensor/restic-$TOPIC_TAG-$TOPIC_TARGET"
     FRIENDLY_TAG=$(echo "$TAG" | tr ':' ' ')
     log_msg "Publishing to $JOB_TOPIC (config/state/attributes)"
-    $MOSQUITTO_PUB -r -t "$JOB_TOPIC/config" -m "{ \"name\": \"Restic backup ($TARGET / $FRIENDLY_TAG)\", \"state_topic\": \"$JOB_TOPIC/state\", \"value_template\": \"{{ value }}\", \"json_attributes_topic\": \"$JOB_TOPIC/attributes\", \"unique_id\": \"restic-$TOPIC_TAG-$TOPIC_TARGET\" }"
+    $MOSQUITTO_PUB -r -t "$JOB_TOPIC/config" -m "{ \"name\": \"Restic backup ($TARGET / $FRIENDLY_TAG)\", \"state_topic\": \"$JOB_TOPIC/state\", \"value_template\": \"{{ value }}\", \"json_attributes_topic\": \"$JOB_TOPIC/attributes\", \"unique_id\": \"restic-$TOPIC_TAG-$TOPIC_TARGET\", \"device\": $DEVICE_JSON }"
     $MOSQUITTO_PUB -r -t "$JOB_TOPIC/state" -m "$STATUS"
     $MOSQUITTO_PUB -r -t "$JOB_TOPIC/attributes" -m "$ATTR"
+
+    if [ "$TARGET" = "backrest" ] && [ "$TAG" = "plan:BojanoBackup" ]; then
+      SINGLE_TOPIC="homeassistant/sensor/restic_backup_backrest_plan_bojanobackup"
+      COMBINED_ATTR=$(echo "$ATTR" "${STATS_ATTR:-{}}" | jq -c -s 'add')
+      log_msg "Publishing consolidated sensor $SINGLE_TOPIC"
+      $MOSQUITTO_PUB -r -t "$SINGLE_TOPIC/config" -m "{ \"name\": \"Restic backup backrest plan BojanoBackup\", \"state_topic\": \"$SINGLE_TOPIC/state\", \"value_template\": \"{{ value }}\", \"json_attributes_topic\": \"$SINGLE_TOPIC/attributes\", \"unique_id\": \"restic-backup-backrest-plan-bojanobackup\", \"device\": $DEVICE_JSON }"
+      $MOSQUITTO_PUB -r -t "$SINGLE_TOPIC/state" -m "$STATUS"
+      $MOSQUITTO_PUB -r -t "$SINGLE_TOPIC/attributes" -m "$COMBINED_ATTR"
+    fi
   done
 }
 
