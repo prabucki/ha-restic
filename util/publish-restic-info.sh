@@ -22,21 +22,42 @@ publish_stats() {
   RESTORE_SIZE_TOPIC="homeassistant/sensor/restic-stats-$TOPIC_TARGET-restore-size"
   RAW_DATA_TOPIC="homeassistant/sensor/restic-stats-$TOPIC_TARGET-raw-data"
   REPO_TOPIC="homeassistant/sensor/restic-repo-$TOPIC_TARGET-size"
+  FILL_TOPIC="homeassistant/sensor/restic-repo-$TOPIC_TARGET-fill"
 
   log_msg "Publishing stats for $TARGET"
   log_msg "Restore topic: $RESTORE_SIZE_TOPIC"
   log_msg "Raw data topic: $RAW_DATA_TOPIC"
   log_msg "Repo topic: $REPO_TOPIC"
+  log_msg "Fill topic: $FILL_TOPIC"
 
   $MOSQUITTO_PUB -r -t "$RESTORE_SIZE_TOPIC/config" -m "{ \"name\": \"restic stats $TARGET restore size\", \"state_topic\": \"$RESTORE_SIZE_TOPIC/state\", \"value_template\": \"{{ value | filesizeformat() }}\", \"unit_of_measurement\": \"B\", \"json_attributes_topic\": \"$RESTORE_SIZE_TOPIC/attributes\", \"unique_id\": \"restic-stats-$TOPIC_TARGET-restore-size\" }"
   $MOSQUITTO_PUB -r -t "$RAW_DATA_TOPIC/config" -m "{ \"name\": \"restic stats $TARGET raw data\", \"state_topic\": \"$RAW_DATA_TOPIC/state\", \"value_template\": \"{{ value | filesizeformat() }}\", \"unit_of_measurement\": \"B\", \"json_attributes_topic\": \"$RAW_DATA_TOPIC/attributes\", \"unique_id\": \"restic-stats-$TOPIC_TARGET-raw-data\" }"
   $MOSQUITTO_PUB -r -t "$REPO_TOPIC/config" -m "{ \"name\": \"Restic repo size ($TARGET)\", \"state_topic\": \"$REPO_TOPIC/state\", \"value_template\": \"{{ value | filesizeformat() }}\", \"unit_of_measurement\": \"B\", \"json_attributes_topic\": \"$REPO_TOPIC/attributes\", \"unique_id\": \"restic-repo-$TOPIC_TARGET-size\" }"
+  $MOSQUITTO_PUB -r -t "$FILL_TOPIC/config" -m "{ \"name\": \"Restic repo fill ($TARGET)\", \"state_topic\": \"$FILL_TOPIC/state\", \"unit_of_measurement\": \"%\", \"device_class\": \"battery\", \"json_attributes_topic\": \"$FILL_TOPIC/attributes\", \"unique_id\": \"restic-repo-$TOPIC_TARGET-fill\" }"
 
   RESTORE_SIZE=$(restic stats --json)
   RAW_DATA=$(restic stats --json --mode raw-data)
   TOTAL_RESTORE_SIZE=$(echo $RESTORE_SIZE | jq ".total_size")
   TOTAL_RAW_DATA=$(echo $RAW_DATA | jq ".total_size")
   REPO_ATTR=$(echo $RESTORE_SIZE $RAW_DATA | jq -c -s 'add')
+
+  FILL_PCT=""
+  if [ -n "${DISK_SIZE:-}" ] && [ "$DISK_SIZE" -gt 0 ] 2>/dev/null; then
+    FILL_PCT=$(python3 - <<EOF
+import sys
+try:
+    disk=int(${DISK_SIZE})
+    used=int(${TOTAL_RAW_DATA:-0})
+    pct = round((used/disk)*100, 2)
+    print(pct)
+except Exception:
+    sys.exit(1)
+EOF
+)
+    log_msg "Repo fill: ${FILL_PCT}% of ${DISK_SIZE} bytes"
+  else
+    log_msg "Repo fill skipped (DISK_SIZE unset or invalid)"
+  fi
 
   log_msg "Total restore size: $TOTAL_RESTORE_SIZE"
   log_msg "Total raw data (repo): $TOTAL_RAW_DATA"
@@ -47,6 +68,11 @@ publish_stats() {
   $MOSQUITTO_PUB -r -t "$RAW_DATA_TOPIC/state" -m $TOTAL_RAW_DATA
   $MOSQUITTO_PUB -r -t "$REPO_TOPIC/attributes" -m "$REPO_ATTR"
   $MOSQUITTO_PUB -r -t "$REPO_TOPIC/state" -m "$TOTAL_RAW_DATA"
+  if [ -n "$FILL_PCT" ]; then
+    FILL_ATTR=$(echo "$REPO_ATTR" | jq -c --argjson fill ${FILL_PCT:-0} '. + {fill_percent:$fill}')
+    $MOSQUITTO_PUB -r -t "$FILL_TOPIC/attributes" -m "$FILL_ATTR"
+    $MOSQUITTO_PUB -r -t "$FILL_TOPIC/state" -m "$FILL_PCT"
+  fi
 }
 
 publish_snapshots() {
