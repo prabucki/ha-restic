@@ -20,7 +20,23 @@ log_msg() { echo "[publish][$TARGET] $1" >&2; }
 
 # Check backup health from systemd journal
 check_backup_health() {
-  journalctl -u backrest.service --no-pager 2>/dev/null | grep -q "ERROR.*backup for plan \"BojanoBackup\"" && echo "FAILED" || echo "OK"
+  set +e
+  local JOURNAL_OUTPUT=$(journalctl -u backrest.service -n 6 --no-pager 2>/dev/null)
+  set -e
+
+  if [[ -z "$JOURNAL_OUTPUT" ]]; then
+    log_msg "Warning: No journal output for backrest.service"
+    echo "OK"
+    return
+  fi
+
+  if echo "$JOURNAL_OUTPUT" | grep -qiE "(error|failed|fatal)"; then
+    log_msg "Health check: FAILED (found error in journal)"
+    echo "FAILED"
+  else
+    log_msg "Health check: OK"
+    echo "OK"
+  fi
 }
 
 # Detect running operation status
