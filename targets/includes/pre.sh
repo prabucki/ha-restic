@@ -1,3 +1,6 @@
+# Ensure TAG is defined (scripts without TAG will skip job topics)
+TAG=${TAG:-}
+
 # Common
 source /etc/restic/targets/includes/common.sh
 
