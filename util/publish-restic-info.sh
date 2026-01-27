@@ -110,56 +110,56 @@ publish_snapshots() {
     local FRIENDLY="${TAG//:/ }"
     
     # Health sensor
-    $MOSQUITTO_PUB -r -t "$BASE-health/config" -m "{\"name\":\"$TARGET $FRIENDLY Health\",\"state_topic\":\"$BASE-health/state\",\"icon\":\"mdi:heart-pulse\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-health\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-health/config" -m "{\"name\":\"Health\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_health\",\"state_topic\":\"$BASE-health/state\",\"icon\":\"mdi:heart-pulse\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-health\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-health/state" -m "$HEALTH"
     
     # Snapshot ID
-    $MOSQUITTO_PUB -r -t "$BASE-id/config" -m "{\"name\":\"$TARGET $FRIENDLY Snapshot ID\",\"state_topic\":\"$BASE-id/state\",\"icon\":\"mdi:identifier\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-id\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-id/config" -m "{\"name\":\"Snapshot ID\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_id\",\"state_topic\":\"$BASE-id/state\",\"icon\":\"mdi:identifier\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-id\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-id/state" -m "${SNAPSHOT_ID:-none}"
     
     # Snapshot time
-    $MOSQUITTO_PUB -r -t "$BASE-time/config" -m "{\"name\":\"$TARGET $FRIENDLY Snapshot Time\",\"state_topic\":\"$BASE-time/state\",\"device_class\":\"timestamp\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-time\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-time/config" -m "{\"name\":\"Snapshot Time\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_time\",\"state_topic\":\"$BASE-time/state\",\"device_class\":\"timestamp\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-time\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-time/state" -m "$SNAPSHOT_TIME"
     
     # Age in seconds
-    $MOSQUITTO_PUB -r -t "$BASE-age/config" -m "{\"name\":\"$TARGET $FRIENDLY Age\",\"state_topic\":\"$BASE-age/state\",\"unit_of_measurement\":\"s\",\"device_class\":\"duration\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-age\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-age/config" -m "{\"name\":\"Age\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_age\",\"state_topic\":\"$BASE-age/state\",\"unit_of_measurement\":\"s\",\"device_class\":\"duration\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-age\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-age/state" -m "$AGE_SEC"
     
     # Snapshot count
-    $MOSQUITTO_PUB -r -t "$BASE-count/config" -m "{\"name\":\"$TARGET $FRIENDLY Snapshot Count\",\"state_topic\":\"$BASE-count/state\",\"icon\":\"mdi:counter\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-count\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-count/config" -m "{\"name\":\"Snapshot Count\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_count\",\"state_topic\":\"$BASE-count/state\",\"icon\":\"mdi:counter\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-count\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-count/state" -m "$SNAPSHOT_COUNT"
     
     # Total restore size
-    $MOSQUITTO_PUB -r -t "$BASE-restore-size/config" -m "{\"name\":\"$TARGET $FRIENDLY Restore Size\",\"state_topic\":\"$BASE-restore-size/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-restore-size\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-restore-size/config" -m "{\"name\":\"Restore Size\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_restore_size\",\"state_topic\":\"$BASE-restore-size/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-restore-size\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-restore-size/state" -m "$TOTAL_RESTORE_SIZE"
     
     # File count
-    $MOSQUITTO_PUB -r -t "$BASE-file-count/config" -m "{\"name\":\"$TARGET $FRIENDLY File Count\",\"state_topic\":\"$BASE-file-count/state\",\"icon\":\"mdi:file-multiple\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-file-count\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-file-count/config" -m "{\"name\":\"File Count\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_file_count\",\"state_topic\":\"$BASE-file-count/state\",\"icon\":\"mdi:file-multiple\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-file-count\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-file-count/state" -m "$TOTAL_FILE_COUNT"
     
     # Uncompressed size
-    $MOSQUITTO_PUB -r -t "$BASE-uncompressed/config" -m "{\"name\":\"$TARGET $FRIENDLY Uncompressed Size\",\"state_topic\":\"$BASE-uncompressed/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-uncompressed\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-uncompressed/config" -m "{\"name\":\"Uncompressed Size\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_uncompressed\",\"state_topic\":\"$BASE-uncompressed/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-uncompressed\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-uncompressed/state" -m "$TOTAL_UNCOMPRESSED"
     
     # Compression ratio
-    $MOSQUITTO_PUB -r -t "$BASE-compression-ratio/config" -m "{\"name\":\"$TARGET $FRIENDLY Compression Ratio\",\"state_topic\":\"$BASE-compression-ratio/state\",\"icon\":\"mdi:compress\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-compression-ratio\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-compression-ratio/config" -m "{\"name\":\"Compression Ratio\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_compression_ratio\",\"state_topic\":\"$BASE-compression-ratio/state\",\"icon\":\"mdi:compress\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-compression-ratio\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-compression-ratio/state" -m "$COMPRESSION_RATIO"
     
     # Compression space saving
-    $MOSQUITTO_PUB -r -t "$BASE-compression-saving/config" -m "{\"name\":\"$TARGET $FRIENDLY Compression Saving\",\"state_topic\":\"$BASE-compression-saving/state\",\"unit_of_measurement\":\"%\",\"icon\":\"mdi:percent\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-compression-saving\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-compression-saving/config" -m "{\"name\":\"Compression Saving\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_compression_saving\",\"state_topic\":\"$BASE-compression-saving/state\",\"unit_of_measurement\":\"%\",\"icon\":\"mdi:percent\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-compression-saving\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-compression-saving/state" -m "$COMPRESSION_SAVING"
     
     # Blob count
-    $MOSQUITTO_PUB -r -t "$BASE-blob-count/config" -m "{\"name\":\"$TARGET $FRIENDLY Blob Count\",\"state_topic\":\"$BASE-blob-count/state\",\"icon\":\"mdi:database\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-blob-count\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-blob-count/config" -m "{\"name\":\"Blob Count\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_blob_count\",\"state_topic\":\"$BASE-blob-count/state\",\"icon\":\"mdi:database\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-blob-count\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-blob-count/state" -m "$TOTAL_BLOB_COUNT"
     
     # Raw data (actual repo size)
-    $MOSQUITTO_PUB -r -t "$BASE-raw-data/config" -m "{\"name\":\"$TARGET $FRIENDLY Raw Data\",\"state_topic\":\"$BASE-raw-data/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-raw-data\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-raw-data/config" -m "{\"name\":\"Raw Data\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_raw_data\",\"state_topic\":\"$BASE-raw-data/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-raw-data\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-raw-data/state" -m "$TOTAL_RAW_DATA"
     
     # Fill percentage (if DISK_SIZE is set)
     if [[ "$FILL_PCT" != "0" ]]; then
-      $MOSQUITTO_PUB -r -t "$BASE-fill/config" -m "{\"name\":\"$TARGET $FRIENDLY Fill\",\"state_topic\":\"$BASE-fill/state\",\"unit_of_measurement\":\"%\",\"icon\":\"mdi:gauge\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-fill\",\"device\":$DEVICE_JSON}"
+      $MOSQUITTO_PUB -r -t "$BASE-fill/config" -m "{\"name\":\"Fill\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_fill\",\"state_topic\":\"$BASE-fill/state\",\"unit_of_measurement\":\"%\",\"icon\":\"mdi:gauge\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-fill\",\"device\":$DEVICE_JSON}"
       $MOSQUITTO_PUB -r -t "$BASE-fill/state" -m "$FILL_PCT"
     fi
     
