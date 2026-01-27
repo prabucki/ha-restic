@@ -4,7 +4,7 @@ JOB=`basename "$0"`
 # Load target
 source /etc/restic/targets/includes/pre.sh
 
-# Return snapshots
-restic snapshots --latest 1 --json | jq '.[].tags | add' | sort | uniq | sed -e 's/\"//g'
+# Return unique tags across all snapshots
+restic snapshots --json | jq -r '.[] | .tags[]' | sort -u
 
 #source /etc/restic/targets/includes/post.sh

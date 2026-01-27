@@ -23,7 +23,8 @@ if [ -n "$TAG" ]; then
 	TOPIC_TARGET=$(sanitize_topic_component "$TARGET")
 	export JOB_TOPIC="homeassistant/sensor/restic-$TOPIC_TAG-$TOPIC_TARGET"
 	# Create/refresh HA discovery config and mark run as started
-	$MOSQUITTO_PUB -r -t "$JOB_TOPIC/config" -m "{ \"name\": \"restic $TAG $TARGET backup\", \"state_topic\": \"$JOB_TOPIC/state\", \"value_template\": \"{{ value }}\", \"json_attributes_topic\": \"$JOB_TOPIC/attributes\", \"unique_id\": \"restic-$TOPIC_TAG-$TOPIC_TARGET\" }"
+	FRIENDLY_TAG=$(echo "$TAG" | tr ':' ' ')
+	$MOSQUITTO_PUB -r -t "$JOB_TOPIC/config" -m "{ \"name\": \"Restic backup ($TARGET / $FRIENDLY_TAG)\", \"state_topic\": \"$JOB_TOPIC/state\", \"value_template\": \"{{ value }}\", \"json_attributes_topic\": \"$JOB_TOPIC/attributes\", \"unique_id\": \"restic-$TOPIC_TAG-$TOPIC_TARGET\" }"
 	$MOSQUITTO_PUB -t "$JOB_TOPIC/state" -m "Running"
 fi
 
