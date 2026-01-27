@@ -13,12 +13,12 @@ TAG="" source /etc/restic/targets/includes/pre.sh "$TARGET_INPUT"
 log_msg() { echo "[publish][$TARGET] $1" >&2; }
 
 publish_snapshots() {
-  local THRESHOLD_SEC=$(((${HEALTH_THRESHOLD_HOURS:-36})*3600))
+  local THRESHOLD_SEC=$(((${HEALTH_THRESHOLD_HOURS:-48})*3600))
   local NOW_TS=$(date +%s)
   local TOPIC_TARGET=$(sanitize_topic_component "$TARGET")
   local DEVICE_JSON="{ \"identifiers\": [\"restic-$TOPIC_TARGET\"], \"name\": \"Restic ($TARGET)\", \"manufacturer\": \"restic\", \"model\": \"restic-mqtt\" }"
 
-  log_msg "Publishing snapshots (threshold ${HEALTH_THRESHOLD_HOURS:-36}h)"
+  log_msg "Publishing snapshots (threshold ${HEALTH_THRESHOLD_HOURS:-48}h)"
 
   while IFS= read -r TAG; do
     [[ -z "$TAG" ]] && continue  # Skip empty lines
@@ -43,10 +43,9 @@ publish_snapshots() {
     local SNAPSHOT_TS=$(date -d "$SNAPSHOT_TIME" +%s 2>/dev/null || echo "0")
     local AGE_SEC=$((NOW_TS-SNAPSHOT_TS))
     
-    # Determine health
+    # Determine health - simply based on snapshot existence
     local HEALTH="missing"
     [[ -n "$SNAPSHOT_ID" ]] && HEALTH="ok"
-    [[ $SNAPSHOT_TS -gt 0 && $AGE_SEC -gt $THRESHOLD_SEC ]] && HEALTH="stale"
 
     # Fetch stats if snapshot exists
     local RESTORE_STATS="{}" RAW_STATS="{}"
@@ -127,10 +126,6 @@ publish_snapshots() {
     # File count
     $MOSQUITTO_PUB -r -t "$BASE-file-count/config" -m "{\"name\":\"File Count\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_file_count\",\"state_topic\":\"$BASE-file-count/state\",\"icon\":\"mdi:file-multiple\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-file-count\",\"device\":$DEVICE_JSON}"
     $MOSQUITTO_PUB -r -t "$BASE-file-count/state" -m "$TOTAL_FILE_COUNT"
-    
-    # Uncompressed size
-    $MOSQUITTO_PUB -r -t "$BASE-uncompressed/config" -m "{\"name\":\"Uncompressed Size\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_uncompressed\",\"state_topic\":\"$BASE-uncompressed/state\",\"unit_of_measurement\":\"B\",\"device_class\":\"data_size\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-uncompressed\",\"device\":$DEVICE_JSON}"
-    $MOSQUITTO_PUB -r -t "$BASE-uncompressed/state" -m "$TOTAL_UNCOMPRESSED"
     
     # Compression ratio
     $MOSQUITTO_PUB -r -t "$BASE-compression-ratio/config" -m "{\"name\":\"Compression Ratio\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_compression_ratio\",\"state_topic\":\"$BASE-compression-ratio/state\",\"icon\":\"mdi:compress\",\"state_class\":\"measurement\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-compression-ratio\",\"device\":$DEVICE_JSON}"
