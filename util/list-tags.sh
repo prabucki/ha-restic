@@ -5,6 +5,6 @@ JOB=`basename "$0"`
 source /etc/restic/targets/includes/pre.sh
 
 # Return snapshots
-restic snapshots --last --json | jq '.[].tags | add' | sort | uniq | sed -e 's/\"//g'
+restic snapshots --latest 1 --json | jq '.[].tags | add' | sort | uniq | sed -e 's/\"//g'
 
 #source /etc/restic/targets/includes/post.sh
