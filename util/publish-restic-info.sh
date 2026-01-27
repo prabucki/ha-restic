@@ -38,10 +38,18 @@ check_repo_connectivity() {
   set -e  # Re-enable exit on error
 
   if [[ $EXIT_CODE -ne 0 ]]; then
+    # Check if repository is locked (means connection is OK, just busy)
+    if echo "$CHECK_OUTPUT" | grep -qE "repository is already locked|unable to create lock in backend"; then
+      log_msg "Repository is locked (operation in progress)"
+      return 0  # Connection is OK, just locked
+    fi
+
+    # Check for connection failures
     if echo "$CHECK_OUTPUT" | grep -qE "ssh: connect to host|No route to host|Connection refused|unable to start the sftp session|Connection timed out|server unexpectedly closed connection"; then
       log_msg "Repository is offline (SSH/SFTP connection failed)"
       return 1
     fi
+
     # For other errors, let them propagate
     log_msg "Repository check failed with unexpected error (exit code: $EXIT_CODE)"
     echo "$CHECK_OUTPUT" >&2
@@ -72,6 +80,65 @@ publish_offline_status() {
 }
 
 publish_snapshots() {
+  log_msg "Publishing snapshots"
+
+  # Get tag list - handle lock errors
+  set +e
+  local TAGS_OUTPUT
+  local TAGS_STDERR
+  TAGS_STDERR=$(mktemp)
+  TAGS_OUTPUT=$(/etc/restic/util/list-tags.sh "$TARGET" 2>"$TAGS_STDERR" | sort -u)
+  local TAGS_EXIT_CODE=$?
+  local STDERR_CONTENT=$(cat "$TAGS_STDERR")
+  rm -f "$TAGS_STDERR"
+  set -e
+
+  log_msg "Tags fetch exit code: $TAGS_EXIT_CODE, stderr: ${STDERR_CONTENT:0:100}"
+
+  # Check if repository is locked when getting tags
+  if [[ $TAGS_EXIT_CODE -ne 0 ]] || echo "$STDERR_CONTENT" | grep -qE "repository is already locked|unable to create lock in backend"; then
+    log_msg "Repository locked while fetching tags, publishing operation status only"
+
+    # Check for running restic operations (exclude this script)
+    local OPERATION_STATUS="locked"
+    local RESTIC_PID=$(pgrep -f "^restic .* $TARGET" | head -n1)
+    if [[ -n "$RESTIC_PID" ]]; then
+      local CMD=$(ps -p "$RESTIC_PID" -o args= 2>/dev/null || echo "")
+      log_msg "Found restic process PID $RESTIC_PID: ${CMD:0:100}"
+      if [[ "$CMD" =~ backup ]]; then
+        OPERATION_STATUS="backup"
+      elif [[ "$CMD" =~ prune ]]; then
+        OPERATION_STATUS="prune"
+      elif [[ "$CMD" =~ check ]]; then
+        OPERATION_STATUS="check"
+      elif [[ "$CMD" =~ verify ]]; then
+        OPERATION_STATUS="verify"
+      elif [[ "$CMD" =~ restore ]]; then
+        OPERATION_STATUS="restore"
+      elif [[ "$CMD" =~ forget ]]; then
+        OPERATION_STATUS="forget"
+      else
+        OPERATION_STATUS="ready"
+      fi
+      log_msg "Detected running operation: $OPERATION_STATUS (PID: $RESTIC_PID)"
+    else
+      log_msg "No restic process found, status remains: $OPERATION_STATUS"
+    fi
+
+    # Check backup health from journal
+    local HEALTH_STATUS=$(check_backup_health)
+
+    # Publish health sensor
+    $MOSQUITTO_PUB -r -t "$BASE-health/config" -m "{\"name\":\"Health\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_health\",\"state_topic\":\"$BASE-health/state\",\"icon\":\"mdi:heart-pulse\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-health\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-health/state" -m "$HEALTH_STATUS"
+
+    # Publish operation status
+    $MOSQUITTO_PUB -r -t "$BASE-operation/config" -m "{\"name\":\"Operation Status\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_operation\",\"state_topic\":\"$BASE-operation/state\",\"icon\":\"mdi:cog\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-operation\",\"device\":$DEVICE_JSON}"
+    $MOSQUITTO_PUB -r -t "$BASE-operation/state" -m "$OPERATION_STATUS"
+
+    log_msg "Published operation status during lock: $OPERATION_STATUS"
+    return 0
+  fi
 
   while IFS= read -r TAG; do
     [[ -z "$TAG" ]] && continue  # Skip empty lines
@@ -95,7 +162,7 @@ publish_snapshots() {
     # Check for running restic operations
     local OPERATION_STATUS="idle"
     local OPERATION_PROGRESS="0"
-    local RESTIC_PID=$(pgrep -f "restic.*$TARGET" | head -n1)
+    local RESTIC_PID=$(pgrep -f "^restic .* $TARGET" | head -n1)
     if [[ -n "$RESTIC_PID" ]]; then
       local CMD=$(ps -p "$RESTIC_PID" -o args= 2>/dev/null || echo "")
       if [[ "$CMD" =~ backup ]]; then
@@ -111,7 +178,7 @@ publish_snapshots() {
       elif [[ "$CMD" =~ forget ]]; then
         OPERATION_STATUS="forget"
       else
-        OPERATION_STATUS="running"
+        OPERATION_STATUS="ready"
       fi
       log_msg "Detected running operation: $OPERATION_STATUS (PID: $RESTIC_PID)"
     fi
@@ -223,7 +290,7 @@ publish_snapshots() {
 
     log_msg "Finished processing tag: $TAG"
 
-  done < <(/etc/restic/util/list-tags.sh "$TARGET" | sort -u)
+  done <<< "$TAGS_OUTPUT"
 }
 
 # Check repository connectivity first
