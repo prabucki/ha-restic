@@ -42,20 +42,45 @@ check_backup_health() {
 # Detect running operation status
 get_operation_status() {
   local DEFAULT_STATUS=${1:-idle}
-  local RESTIC_PID=$(pgrep -f "^restic .* $TARGET" | head -n1)
 
-  [[ -z "$RESTIC_PID" ]] && { echo "$DEFAULT_STATUS"; return; }
+  # Collect all restic PIDs (match anywhere in the command line).
+  local PIDS
+  PIDS=$(pgrep -f restic 2>/dev/null || true)
+  [[ -z "$PIDS" ]] && { echo "$DEFAULT_STATUS"; return; }
 
-  local CMD=$(ps -p "$RESTIC_PID" -o args= 2>/dev/null || echo "")
-  log_msg "Found restic PID $RESTIC_PID"
+  # Prefer processes that mention the target in their args (most accurate).
+  for RESTIC_PID in $PIDS; do
+    local CMD
+    CMD=$(ps -p "$RESTIC_PID" -o args= 2>/dev/null || echo "")
+    [[ -z "$CMD" ]] && continue
+    log_msg "Found restic PID $RESTIC_PID"
+    if [[ -n "${TARGET:-}" ]] && [[ "$CMD" == *"$TARGET"* ]]; then
+      if [[ "$CMD" =~ backup ]]; then echo "backup"; return; fi
+      if [[ "$CMD" =~ prune ]]; then echo "prune"; return; fi
+      if [[ "$CMD" =~ check ]]; then echo "check"; return; fi
+      if [[ "$CMD" =~ verify ]]; then echo "verify"; return; fi
+      if [[ "$CMD" =~ restore ]]; then echo "restore"; return; fi
+      if [[ "$CMD" =~ forget ]]; then echo "forget"; return; fi
+      echo "ready"; return
+    fi
+  done
 
-  if [[ "$CMD" =~ backup ]]; then echo "backup"
-  elif [[ "$CMD" =~ prune ]]; then echo "prune"
-  elif [[ "$CMD" =~ check ]]; then echo "check"
-  elif [[ "$CMD" =~ verify ]]; then echo "verify"
-  elif [[ "$CMD" =~ restore ]]; then echo "restore"
-  elif [[ "$CMD" =~ forget ]]; then echo "forget"
-  else echo "running"; fi
+  # No PID matched the target specifically — fall back to any restic process.
+  for RESTIC_PID in $PIDS; do
+    local CMD
+    CMD=$(ps -p "$RESTIC_PID" -o args= 2>/dev/null || echo "")
+    [[ -z "$CMD" ]] && continue
+    log_msg "Found restic PID $RESTIC_PID (fallback)"
+    if [[ "$CMD" =~ backup ]]; then echo "backup"; return; fi
+    if [[ "$CMD" =~ prune ]]; then echo "prune"; return; fi
+    if [[ "$CMD" =~ check ]]; then echo "check"; return; fi
+    if [[ "$CMD" =~ verify ]]; then echo "verify"; return; fi
+    if [[ "$CMD" =~ restore ]]; then echo "restore"; return; fi
+    if [[ "$CMD" =~ forget ]]; then echo "forget"; return; fi
+    echo "ready"; return
+  done
+
+  echo "$DEFAULT_STATUS"
 }
 
 # Publish health and operation status sensors
