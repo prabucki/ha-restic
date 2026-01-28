@@ -124,7 +124,8 @@ publish_snapshots() {
     # Fetch snapshot data
     local SNAPSHOT_LIST=$(restic snapshots --tag "$TAG" --json 2>/dev/null || echo "[]")
     local SNAPSHOT_COUNT=$(jq length <<< "$SNAPSHOT_LIST")
-    local SNAPSHOT=$(jq -c '.[0] // {}' <<< "$SNAPSHOT_LIST")
+    # Choose the most recent snapshot by time (instead of the first/oldest)
+    local SNAPSHOT=$(jq -c 'if length == 0 then {} else sort_by(.time) | .[-1] end' <<< "$SNAPSHOT_LIST")
     local SNAPSHOT_ID=$(jq -r '.short_id // .id // ""' <<< "$SNAPSHOT")
     local SNAPSHOT_TIME=$(jq -r '.time // ""' <<< "$SNAPSHOT")
 
