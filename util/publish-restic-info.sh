@@ -125,8 +125,10 @@ check_repo_connectivity() {
 
 # Publish offline status
 publish_offline_status() {
-  log_msg "Publishing offline status"
-  publish_status_sensors "$(check_backup_health)" "offline"
+  log_msg "Publishing offline status (operation-only)"
+  # Publish only the Operation Status sensor and its state as 'offline'
+  $MOSQUITTO_PUB -r -t "$BASE-operation/config" -m "{\"name\":\"Operation Status\",\"object_id\":\"restic_${TOPIC_TARGET}_${TOPIC_TAG}_operation\",\"state_topic\":\"$BASE-operation/state\",\"icon\":\"mdi:cog\",\"unique_id\":\"restic-$TOPIC_TAG-$TOPIC_TARGET-operation\",\"device\":$DEVICE_JSON}"
+  $MOSQUITTO_PUB -r -t "$BASE-operation/state" -m "offline"
 }
 
 # Publish snapshots
