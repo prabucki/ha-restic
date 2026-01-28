@@ -79,12 +79,20 @@ check_repo_connectivity() {
   set -e
 
   if [[ $EXIT_CODE -ne 0 ]]; then
-    echo "$CHECK_OUTPUT" | grep -qE "repository is already locked|unable to create lock in backend" && { log_msg "Repository locked"; return 0; }
-    echo "$CHECK_OUTPUT" | grep -qE "ssh: connect to host|No route to host|Connection refused|unable to start the sftp session|Connection timed out|server unexpectedly closed connection" && { log_msg "Repository offline"; return 1; }
+    echo "$CHECK_OUTPUT" | grep -qEi "repository is already locked|unable to create lock in backend" && { log_msg "Repository locked"; return 0; }
+
+    # Wider set of patterns that indicate the repository/backend is unreachable
+    echo "$CHECK_OUTPUT" | grep -qEi "ssh: connect to host|No route to host|Connection refused|unable to start the sftp session|Connection timed out|server unexpectedly closed connection|unable to open repository|unable to open repo|is not a repository|no such file or directory|permission denied|dial tcp|no such host|name or service not known|connection reset by peer|unexpected EOF|tls: handshake|ssh: handshake|unable to resolve host" && { log_msg "Repository offline"; return 1; }
+
     log_msg "Repository check failed (exit code: $EXIT_CODE)"
     echo "$CHECK_OUTPUT" >&2
     exit $EXIT_CODE
   fi
+
+  # Even when restic returns exit code 0, it may still emit warnings/errors
+  # on stdout/stderr that indicate the backend is unreachable. Scan output
+  # for those signs and treat as offline when found.
+  echo "$CHECK_OUTPUT" | grep -qEi "ssh: connect to host|No route to host|Connection refused|unable to start the sftp session|Connection timed out|server unexpectedly closed connection|unable to open repository|unable to open repo|is not a repository|no such file or directory|permission denied|dial tcp|no such host|name or service not known|connection reset by peer|unexpected EOF|tls: handshake|ssh: handshake|unable to resolve host|error:|fatal:|panic:" && { log_msg "Repository offline (detected in output)"; return 1; }
 
   log_msg "Repository online"
   return 0
@@ -120,6 +128,15 @@ publish_snapshots() {
     [[ -z "$TAG" || ! "$TAG" =~ ^plan: ]] && continue
 
     log_msg "Processing tag: $TAG"
+
+    # Re-check repository connectivity before doing per-tag work; if it went offline
+    # after the initial check, publish offline status and stop to avoid overwriting
+    # the offline state with "idle" later on.
+    if ! check_repo_connectivity >/dev/null 2>&1; then
+      log_msg "Repository went offline during processing"
+      publish_offline_status
+      return 0
+    fi
 
     # Fetch snapshot data
     local SNAPSHOT_LIST=$(restic snapshots --tag "$TAG" --json 2>/dev/null || echo "[]")
